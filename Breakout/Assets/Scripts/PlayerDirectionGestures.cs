@@ -1,5 +1,5 @@
 [System.Serializable]
-public class PlayerDirectionGestures
+public class PlayerDirectionGestures // klasa odpowiadająca JSONowi z API
 {
     public string direction;
     public bool isNew;

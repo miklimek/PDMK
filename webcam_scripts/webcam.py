@@ -18,9 +18,9 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision, BaseOptions
 
-# Set camera
-deviceID = 0  # 0 = open default camera
-apiID = cv2.CAP_ANY  # 0 = autodetect default API
+# ustaw kamerę domyślną
+deviceID = 0
+apiID = cv2.CAP_ANY
 
 
 class VideoThread(QThread):
@@ -29,16 +29,16 @@ class VideoThread(QThread):
     change_gestures_signal = pyqtSignal(str)
 
     def __init__(self, gestures, tangible, parent=None):
-        # initialize thread, set parameters based off parent's
+        # Uruchom wątek kamery z parametrami przekazanymi od "rodzica"
         QThread.__init__(self, parent)
         self.video = cv2.VideoCapture(deviceID, apiID)
         self.runFlag = True
         self.gestures = gestures
         self.tangible = tangible
-        if tangible:  # use yolo model if tangible
+        if tangible:  # jeśli wybrano sterowanie tangible to inicjowany jest model YOLOv8
             self.model = YOLO('yolov8n.pt')
         if gestures:
-            # set model to default and running mode to stream, after processing image call processGestures
+            # jeśli wybrano sterowanie gestami to inicjowany jest GestureRecognizer w trybie transmisjii wideo
             options = mp.tasks.vision.GestureRecognizerOptions(base_options=BaseOptions(
                 model_asset_path='gesture_recognizer.task'),
                 running_mode=mp.tasks.vision.RunningMode.LIVE_STREAM,
@@ -46,66 +46,58 @@ class VideoThread(QThread):
             self.recognizer = vision.GestureRecognizer.create_from_options(options)
 
     def run(self):
-        # iterating over every frame of the webcam footage
+        # Przetwarzanie obrazu z kamery klatka po klatce
         while self.runFlag:
             ret, frame = self.video.read()
             if ret:
                 if self.tangible:
                     self.processTangible(frame, self.model)
                 if self.gestures:
-                    # get current timestamp, format image and start recognition
+                    # Przekaż aktualny znacznik czasowy, zmień format obrazu do sRGB
                     timestamp = self.video.get(cv2.CAP_PROP_POS_MSEC)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
                     self.recognizer.recognize_async(mp_image, int(timestamp))
             else:
-                self.video.release()
+                self.video.release() # zakończ wątek jeśli brak nowych klatek
 
-    def end(self):
+    def end(self): # kończy przetwarzanie obrazu z kamery
         self.runFlag = False
         self.video.release()
         self.wait()
 
     def processTangible(self, frame, model):
-        # detect object of given class and show on video
-        ## 11 - stop sign, 0 - person, 15 - cat, 67 - cell phone
-        results = model.predict(frame, classes=67, conf=0.4)[0]
-        annotated_frame = results.plot()
-        if results.boxes:
-            coordinates = results.boxes[0].xyxy[0].numpy()
-            width = results.orig_shape[1]
-            center = (coordinates[2] + coordinates[0]) / 2
-            position = (center / (width / 2)) - 1
-            position *= -1
-            # rescaling the coordinates, the only ones that matter are the x coordinates,
-            # we want to find the center of prediction hence left + right /2,
-            # then we offset the position by the half-width and scale it to < -1; 1>
-            # then multiply by -1 so that when moving to the left the player will move left
-            # otherwise return 0 - do not update position
+        # Detekcja obiektu klasy 67 - telefonu i wizualizacja detekcji na ekranie
+        results = model.predict(frame, classes=67, conf=0.4)[0] # predykcja modelu z pewnością (ang. confidence) 40%
+        annotated_frame = results.plot() # zaznacz wykryty obszar na obrazie wyjściowym
+        if results.boxes: # jeśli sieć zwróciła wykryty obszar obiektu
+            coordinates = results.boxes[0].xyxy[0].numpy() # współrzędne wierzchołków obszaru detekcji
+            width = results.orig_shape[1] # szerokość obrazu wejściowego (klatki filmu)
+            center = (coordinates[2] + coordinates[0]) / 2 # znajdowana jest wartość x punktu środkowego wykrytego obszaru ((x1 + x2)/2 bo lewy górny róg obrazu ma współrzędne (0,0))
+            position = (center / (width / 2)) - 1 # pozycja przeskalowana do skali <-1,1>
+            position *= -1 # obraz z kamery jest lustrzanym odbiciem więc trzeba znaleźć odwrotność pozycji
         else:
-            position = 0
-        self.change_pixmap_signal.emit(annotated_frame)
-        self.change_tangible_signal.emit(position)
-        # send updated frame and position
+            position = 0 # jeśli nie wykryto obiektu pozycja ustwiana jest na 0
+        self.change_pixmap_signal.emit(annotated_frame) # zmień wyświetlany na ekranie obraz
+        self.change_tangible_signal.emit(position) # zmień aktualną pozycję gracza
 
     def processGestures(self, result: mp.tasks.vision.GestureRecognizerResult, output_image: mp.Image,
                         timestamp_ms: int):
-        # update video to newest frame
+        # zmień wyświetlany obraz na nową klatkę
         self.change_pixmap_signal.emit(output_image.numpy_view())
-        # if detected gestures change gesture else 'None'
-        if result.gestures:
+        if result.gestures: # jeśli wykryto gesty
             gesture = result.gestures[0][0].category_name
             print('gesture recognition result: {}'.format(gesture))
-            if gesture.__eq__("Victory"):
+            if gesture.__eq__("Victory"): # jeśli to gest wiktorii to ustaw kierunek na lewo
                 self.change_gestures_signal.emit('Left')
-            elif gesture.__eq__("Closed_Fist"):
+            elif gesture.__eq__("Closed_Fist"): # jeśli gest zamkniętej pięści to ustaw kierunek na prawo
                 self.change_gestures_signal.emit('Right')
-            else:
+            else: # jeśli inny gest to ustaw kierunek na stop
                 self.change_gestures_signal.emit('Stop')
-        else:
+        else: # jeśli nie wykryto gestów to ustaw kierunek na stop
             self.change_gestures_signal.emit('Stop')
 
 def convertCVtoQt(cvImg):
-    # Convert from an opencv image to QPixmap
+    # funkcja zmienia format klatki filmu na format możliwy do wyświetlenia
     rgb_image = cv2.cvtColor(cvImg, cv2.COLOR_BGR2RGB)
     h, w, ch = rgb_image.shape
     bytes_per_line = ch * w
@@ -118,7 +110,7 @@ class Gestures(QWidget):
     def __init__(self):
         super(Gestures, self).__init__()
 
-        self._createServer()
+        self._createServer() # utwórz serwer API
 
         self.setGeometry(0, 0, 1280, 720)
         self.setWindowTitle("Gesture controller")
@@ -132,36 +124,36 @@ class Gestures(QWidget):
         self.videoPlayer.setPixmap(gray)
         mainLayout.addWidget(self.videoPlayer)
 
-        # Start video thread, image processing within the thread
+        # Inicjuje wątek wideo z parametrami dla gestów
         self.thread = VideoThread(gestures=True, tangible=False)
         self.thread.change_pixmap_signal.connect(self.updateImage)
         self.thread.change_gestures_signal.connect(self.setGesturesDirection)
         self.thread.start()
 
-        self.direction = 'Stop'
+        self.direction = 'Stop' # aktualny kierunek to stop
 
-    def updateImage(self, cvImg):
+    def updateImage(self, cvImg): # funkcja zmieniająca wyświetlaną klatkę obrazu
         qtImg = convertCVtoQt(cvImg)
         self.videoPlayer.setPixmap(qtImg)
 
-    def closeEvent(self, event):
+    def closeEvent(self, event): # przy zamknięciu okna zakończ wątek
         self.thread.end()
         event.accept()
 
-    def _createServer(self):
+    def _createServer(self): # utwórz serwer FastAPI
         self.app = FastAPI()
 
-        # endpoint where we put the updated position
+        # ustawia endpoint dla gestów
         @self.app.get("/gestures")
         async def getGesturesDirection():
-            return {"direction": self.direction}
+            return {"direction": self.direction} # format JSON wysyłanych danych o kierunku
 
-        # start fastapi server at given port
+        # uruchom serwer na danym porcie (host - domyślny localhost)
         self.server = threading.Thread(target=uvicorn.run, kwargs={"app": self.app, "port": 81})
         self.server.start()
 
     def setGesturesDirection(self, direction: str):
-        # updating position, if returned position is equal 0 then remain in previous position
+        # funkcja odświeżająca kierunek gracza
         self.direction = direction
 
 
@@ -169,7 +161,7 @@ class Tangible(QWidget):
     def __init__(self):
         super(Tangible, self).__init__()
 
-        self._createServer()
+        self._createServer() # utwórz serwer API
 
         self.setGeometry(0, 0, 1280, 720)
         self.setWindowTitle("Tangible controller")
@@ -183,15 +175,15 @@ class Tangible(QWidget):
         self.videoPlayer.setPixmap(gray)
         mainLayout.addWidget(self.videoPlayer)
 
-        # Start video thread, image processing within the thread
+        # Inicjuje wątek wideo z parametrami dla tangible interface
         self.thread = VideoThread(gestures=False, tangible=True)
         self.thread.change_pixmap_signal.connect(self.updateImage)
         self.thread.change_tangible_signal.connect(self.setTangiblePosition)
         self.thread.start()
 
-        self.position = 0
+        self.position = 0 # ustawia pozycję wyjściową na 0
 
-    def updateImage(self, cvImg):
+    def updateImage(self, cvImg): # funkcja zmieniająca wyświetlaną klatkę obrazu
         qtImg = convertCVtoQt(cvImg)
         self.videoPlayer.setPixmap(qtImg)
 
@@ -202,22 +194,22 @@ class Tangible(QWidget):
     def _createServer(self):
         self.app = FastAPI()
 
-        # endpoint where we put the updated position
+        # ustawia endpoint dla tangible
         @self.app.get("/tangible")
         async def getTangiblePosition():
-            return {"position": self.position}
+            return {"position": self.position} # format JSON wysyłanych danych o pozycji
 
-        # start fastapi server at given port
+        # uruchom serwer na danym porcie (host - domyślny localhost)
         self.server = threading.Thread(target=uvicorn.run, kwargs={"app": self.app, "port": 81})
         self.server.start()
 
     def setTangiblePosition(self, position: float):
-        # updating position, if returned position is equal 0 then remain in previous position
+        # funkcja odświeżająca pozycję gracza, jeśli 0 to nie zmieniaj pozycji gracza (dokładne 0 raczej nie wydarzy się naturalnie)
         if position == 0:
             return
         self.position = position
 
-# Main window, option to choose gesture controls or tangible controls
+# Główne okno aplikacji, opcje wyboru sterowania
 class Webcam(QWidget):
     def __init__(self):
         super().__init__()

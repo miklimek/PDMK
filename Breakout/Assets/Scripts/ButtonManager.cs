@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-public class ButtonManager : MonoBehaviour
+public class ButtonManager : MonoBehaviour // ładuje sceny przypisane do odpowiednich przycisków w menu
 {
     public void startKeyboard()
     {
